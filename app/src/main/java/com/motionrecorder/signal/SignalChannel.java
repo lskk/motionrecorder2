@@ -7,6 +7,7 @@ public class SignalChannel {
     public String code;
     public String startDate;
     public String endDate;
+    public String description;
     public String locationCode;
     public Float latitude;
     public Float longitude;
@@ -17,7 +18,7 @@ public class SignalChannel {
     public String storageFormat;
     public Float clockDrift;
     public String calibrationUnits;
-    public String sensor;
+    public SignalSensor sensor;
     public String preAmplifier;
     public String dataLogger;
     public String equipment;
