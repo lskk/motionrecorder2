@@ -1,0 +1,78 @@
+apply plugin: 'com.android.application'
+
+android {
+    compileSdkVersion 28
+    buildToolsVersion "29.0.0"
+    defaultConfig {
+        applicationId "com.motionrecorder"
+        minSdkVersion 24
+        targetSdkVersion 28
+        multiDexEnabled true
+        versionCode 5
+        versionName "1.1.5"
+        testInstrumentationRunner "androidx.test.runner.AndroidJUnitRunner"
+    }
+    buildTypes {
+        release {
+            minifyEnabled false
+            proguardFiles getDefaultProguardFile('proguard-android-optimize.txt'), 'proguard-rules.pro'
+        }
+    }
+    packagingOptions {
+        exclude 'META-INF/DEPENDENCIES'
+        exclude 'META-INF/DEPENDENCIES.txt'
+        exclude 'META-INF/LICENSE'
+        exclude 'META-INF/LICENSE.txt'
+        exclude 'META-INF/license.txt'
+        exclude 'META-INF/NOTICE'
+        exclude 'META-INF/NOTICE.txt'
+        exclude 'META-INF/notice.txt'
+        exclude 'META-INF/INDEX.LIST'
+    }
+}
+
+repositories {
+    jcenter()
+}
+
+dependencies {
+    implementation fileTree(dir: 'libs', include: ['*.jar'])
+    implementation 'androidx.appcompat:appcompat:1.0.2'
+    implementation 'androidx.constraintlayout:constraintlayout:1.1.3'
+
+    implementation 'com.google.guava:guava:28.0-android'
+    // ejml 0.34+ requires API 26 (Android 8), so we use older version
+    implementation 'org.ejml:ejml-simple:0.33'
+    implementation 'com.squareup.moshi:moshi:1.8.0'
+    implementation 'com.google.android.gms:play-services-location:17.0.0'
+    implementation 'com.jakewharton.threetenabp:threetenabp:1.2.1'
+
+/*
+W/linker: Warning: "/data/app/com.motionrecorder-1hfILQWFojSAnXhVmjFc7w==/lib/arm64/libjnind4jcpu.so" unused DT entry: DT_RPATH (type 0xf arg 0x5091d) (ignoring)
+W/linker: Warning: "/data/app/com.motionrecorder-1hfILQWFojSAnXhVmjFc7w==/lib/arm64/libjniopenblas_nolapack.so" unused DT entry: DT_RPATH (type 0xf arg 0xa034) (ignoring)
+E/linker: library "/system/bin/linker64" ("/system/bin/linker64") needed or dlopened by "/data/app/com.motionrecorder-1hfILQWFojSAnXhVmjFc7w==/lib/arm64/libjnind4jcpu.so" is not accessible for the namespace: [name="classloader-namespace", ld_library_paths="", default_library_paths="/data/app/com.motionrecorder-1hfILQWFojSAnXhVmjFc7w==/lib/arm64:/data/app/com.motionrecorder-1hfILQWFojSAnXhVmjFc7w==/base.apk!/lib/arm64-v8a:/data/app/com.motionrecorder-1hfILQWFojSAnXhVmjFc7w==/split_lib_dependencies_apk.apk!/lib/arm64-v8a:/data/app/com.motionrecorder-1hfILQWFojSAnXhVmjFc7w==/split_lib_resources_apk.apk!/lib/arm64-v8a:/data/app/com.motionrecorder-1hfILQWFojSAnXhVmjFc7w==/split_lib_slice_0_apk.apk!/lib/arm64-v8a:/data/app/com.motionrecorder-1hfILQWFojSAnXhVmjFc7w==/split_lib_slice_1_apk.apk!/lib/arm64-v8a:/data/app/com.motionrecorder-1hfILQWFojSAnXhVmjFc7w==/split_lib_slice_2_apk.apk!/lib/arm64-v8a:/data/app/com.motionrecorder-1hfILQWFojSAnXhVmjFc7w==/split_lib_slice_3_apk.apk!/lib/arm64-v8a:/data/app/com.motionrecorder-1h
+E/linker: library "/system/lib64/libandroid_runtime.so" ("/system/lib64/libandroid_runtime.so") needed or dlopened by "/data/app/com.motionrecorder-1hfILQWFojSAnXhVmjFc7w==/lib/arm64/libjnind4jcpu.so" is not accessible for the namespace: [name="classloader-namespace", ld_library_paths="", default_library_paths="/data/app/com.motionrecorder-1hfILQWFojSAnXhVmjFc7w==/lib/arm64:/data/app/com.motionrecorder-1hfILQWFojSAnXhVmjFc7w==/base.apk!/lib/arm64-v8a:/data/app/com.motionrecorder-1hfILQWFojSAnXhVmjFc7w==/split_lib_dependencies_apk.apk!/lib/arm64-v8a:/data/app/com.motionrecorder-1hfILQWFojSAnXhVmjFc7w==/split_lib_resources_apk.apk!/lib/arm64-v8a:/data/app/com.motionrecorder-1hfILQWFojSAnXhVmjFc7w==/split_lib_slice_0_apk.apk!/lib/arm64-v8a:/data/app/com.motionrecorder-1hfILQWFojSAnXhVmjFc7w==/split_lib_slice_1_apk.apk!/lib/arm64-v8a:/data/app/com.motionrecorder-1hfILQWFojSAnXhVmjFc7w==/split_lib_slice_2_apk.apk!/lib/arm64-v8a:/data/app/com.motionrecorder-1hfILQWFojSAnXhVmjFc7w==/split_lib_slice_3_apk.apk!/lib/arm64-v8a:/
+E/linker: library "/system/lib64/libbase.so" ("/system/lib64/libbase.so") needed or dlopened by "/data/app/com.motionrecorder-1hfILQWFojSAnXhVmjFc7w==/lib/arm64/libjnind4jcpu.so" is not accessible for the namespace: [name="classloader-namespace", ld_library_paths="", default_library_paths="/data/app/com.motionrecorder-1hfILQWFojSAnXhVmjFc7w==/lib/arm64:/data/app/com.motionrecorder-1hfILQWFojSAnXhVmjFc7w==/base.apk!/lib/arm64-v8a:/data/app/com.motionrecorder-1hfILQWFojSAnXhVmjFc7w==/split_lib_dependencies_apk.apk!/lib/arm64-v8a:/data/app/com.motionrecorder-1hfILQWFojSAnXhVmjFc7w==/split_lib_resources_apk.apk!/lib/arm64-v8a:/data/app/com.motionrecorder-1hfILQWFojSAnXhVmjFc7w==/split_lib_slice_0_apk.apk!/lib/arm64-v8a:/data/app/com.motionrecorder-1hfILQWFojSAnXhVmjFc7w==/split_lib_slice_1_apk.apk!/lib/arm64-v8a:/data/app/com.motionrecorder-1hfILQWFojSAnXhVmjFc7w==/split_lib_slice_2_apk.apk!/lib/arm64-v8a:/data/app/com.motionrecorder-1hfILQWFojSAnXhVmjFc7w==/split_lib_slice_3_apk.apk!/lib/arm64-v8a:/data/app/com.motionrec
+    library "/system/lib64/libbinder.so" ("/system/lib64/libbinder.so") needed or dlopened by "/data/app/com.motionrecorder-1hfILQWFojSAnXhVmjFc7w==/lib/arm64/libjnind4jcpu.so" is not accessible for the namespace: [name="classloader-namespace", ld_library_paths="", default_library_paths="/data/app/com.motionrecorder-1hfILQWFojSAnXhVmjFc7w==/lib/arm64:/data/app/com.motionrecorder-1hfILQWFojSAnXhVmjFc7w==/base.apk!/lib/arm64-v8a:/data/app/com.motionrecorder-1hfILQWFojSAnXhVmjFc7w==/split_lib_dependencies_apk.apk!/lib/arm64-v8a:/data/app/com.motionrecorder-1hfILQWFojSAnXhVmjFc7w==/split_lib_resources_apk.apk!/lib/arm64-v8a:/data/app/com.motionrecorder-1hfILQWFojSAnXhVmjFc7w==/split_lib_slice_0_apk.apk!/lib/arm64-v8a:/data/app/com.motionrecorder-1hfILQWFojSAnXhVmjFc7w==/split_lib_slice_1_apk.apk!/lib/arm64-v8a:/data/app/com.motionrecorder-1hfILQWFojSAnXhVmjFc7w==/split_lib_slice_2_apk.apk!/lib/arm64-v8a:/data/app/com.motionrecorder-1hfILQWFojSAnXhVmjFc7w==/split_lib_slice_3_apk.apk!/lib/arm64-v8a:/data/app/com.motio
+    library "/system/lib64/libcutils.so" ("/system/lib64/libcutils.so") needed or dlopened by "/data/app/com.motionrecorder-1hfILQWFojSAnXhVmjFc7w==/lib/arm64/libjnind4jcpu.so" is not accessible for the namespace: [name="classloader-namespace", ld_library_paths="", default_library_paths="/data/app/com.motionrecorder-1hfILQWFojSAnXhVmjFc7w==/lib/arm64:/data/app/com.motionrecorder-1hfILQWFojSAnXhVmjFc7w==/base.apk!/lib/arm64-v8a:/data/app/com.motionrecorder-1hfILQWFojSAnXhVmjFc7w==/split_lib_dependencies_apk.apk!/lib/arm64-v8a:/data/app/com.motionrecorder-1hfILQWFojSAnXhVmjFc7w==/split_lib_resources_apk.apk!/lib/arm64-v8a:/data/app/com.motionrecorder-1hfILQWFojSAnXhVmjFc7w==/split_lib_slice_0_apk.apk!/lib/arm64-v8a:/data/app/com.motionrecorder-1hfILQWFojSAnXhVmjFc7w==/split_lib_slice_1_apk.apk!/lib/arm64-v8a:/data/app/com.motionrecorder-1hfILQWFojSAnXhVmjFc7w==/split_lib_slice_2_apk.apk!/lib/arm64-v8a:/data/app/com.motionrecorder-1hfILQWFojSAnXhVmjFc7w==/split_lib_slice_3_apk.apk!/lib/arm64-v8a:/data/app/com.motio
+
+    java.lang.UnsatisfiedLinkError: No implementation found for void org.bytedeco.openblas.presets.openblas_nolapack$SetNumThreads.allocate() (tried Java_org_bytedeco_openblas_presets_openblas_1nolapack_00024SetNumThreads_allocate and Java_org_bytedeco_openblas_presets_openblas_1nolapack_00024SetNumThreads_allocate__)
+
+ */
+//    api 'com.getkeepsafe.relinker:relinker:1.3.1'
+//    api group: 'org.nd4j', name: 'nd4j-native', version: '1.0.0-beta4'
+//    implementation group: 'org.nd4j', name: 'nd4j-native', version: '1.0.0-beta4', classifier: "android-arm"
+//    implementation group: 'org.nd4j', name: 'nd4j-native', version: '1.0.0-beta4', classifier: "android-arm64"
+//    implementation group: 'org.nd4j', name: 'nd4j-native', version: '1.0.0-beta4', classifier: "android-x86"
+//    implementation group: 'org.nd4j', name: 'nd4j-native', version: '1.0.0-beta4', classifier: "android-x86_64"
+//    api group: 'org.bytedeco.javacpp-presets', name: 'openblas', version: '0.3.5-1.4.4'
+//    implementation group: 'org.bytedeco.javacpp-presets', name: 'openblas', version: '0.3.5-1.4.4', classifier: "android-arm"
+//    implementation group: 'org.bytedeco.javacpp-presets', name: 'openblas', version: '0.3.5-1.4.4', classifier: "android-arm64"
+//    implementation group: 'org.bytedeco.javacpp-presets', name: 'openblas', version: '0.3.5-1.4.4', classifier: "android-x86"
+//    implementation group: 'org.bytedeco.javacpp-presets', name: 'openblas', version: '0.3.5-1.4.4', classifier: "android-x86_64"
+
+    testImplementation 'junit:junit:4.12'
+    androidTestImplementation 'androidx.test:runner:1.2.0'
+    androidTestImplementation 'androidx.test.espresso:espresso-core:3.2.0'
+}
+
