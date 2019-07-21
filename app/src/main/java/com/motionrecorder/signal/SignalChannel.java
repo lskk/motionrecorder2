@@ -18,7 +18,7 @@ public class SignalChannel {
     public String storageFormat;
     public Float clockDrift;
     public String calibrationUnits;
-    public SignalSensor sensor;
+    public SignalEquipment sensor;
     public String preAmplifier;
     public String dataLogger;
     public String equipment;

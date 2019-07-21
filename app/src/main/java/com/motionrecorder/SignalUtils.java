@@ -26,8 +26,8 @@ public class SignalUtils {
             final float[] result = new float[newLength];
             for (int i = 0; i < newLength; i++) {
                 float sourcePos = ((float) i) / (newLength - 1) * (source.length - 1);
-                float frac1 = sourcePos - Math.abs(sourcePos);
-                float frac2 = 1f - sourcePos;
+                float frac1 = 1f - (sourcePos - (float) Math.floor(sourcePos)); // full to the first value means frac1 is 1.0
+                float frac2 = 1f - frac1;
                 float v1 = source[(int) sourcePos];
                 float v2 = ((int) sourcePos + 1) < source.length ? source[(int) sourcePos + 1] : source[source.length - 1];
                 float interpolated = frac1 * v1 + frac2 * v2;

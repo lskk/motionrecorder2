@@ -10,6 +10,9 @@ import android.hardware.SensorEvent;
 import android.hardware.SensorEventListener;
 import android.hardware.SensorManager;
 import android.location.Location;
+import android.location.LocationManager;
+import android.location.LocationProvider;
+import android.os.Build;
 import android.os.Bundle;
 import android.provider.Settings;
 import android.util.Log;
@@ -36,9 +39,9 @@ import com.motionrecorder.signal.ChannelType;
 import com.motionrecorder.signal.SignalChannel;
 import com.motionrecorder.signal.SignalContact;
 import com.motionrecorder.signal.SignalDoc;
+import com.motionrecorder.signal.SignalEquipment;
 import com.motionrecorder.signal.SignalNetwork;
 import com.motionrecorder.signal.SignalOperator;
-import com.motionrecorder.signal.SignalSensor;
 import com.motionrecorder.signal.SignalStation;
 import com.motionrecorder.signal.SignalTrace;
 import com.squareup.moshi.JsonAdapter;
@@ -81,12 +84,14 @@ public class MainActivity extends AppCompatActivity
     private EvictingQueue<Float> geomagneticZ;
     private EvictingQueue<Float> latBuf;
     private EvictingQueue<Float> lonBuf;
-    private EvictingQueue<Float> eleBuf;
+    private EvictingQueue<Float> altBuf;
     private FusedLocationProviderClient fusedLocationClient;
     private Moshi moshi;
     private final String seedNetworkCode = "XX";
     private OffsetDateTime startTime;
     private LocationCallback locationCallback;
+    private LocationManager locationManager;
+    private Location lastLocation;
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
@@ -143,7 +148,7 @@ public class MainActivity extends AppCompatActivity
         gyroZ = EvictingQueue.<Float>create(targetSamplingRate * clipDurationSecs * 2);
         latBuf = EvictingQueue.<Float>create(locationSamplingRate * clipDurationSecs * 2);
         lonBuf = EvictingQueue.<Float>create(locationSamplingRate * clipDurationSecs * 2);
-        eleBuf = EvictingQueue.<Float>create(locationSamplingRate * clipDurationSecs * 2);
+        altBuf = EvictingQueue.<Float>create(locationSamplingRate * clipDurationSecs * 2);
 
         moshi = new Moshi.Builder().build();
 
@@ -154,7 +159,7 @@ public class MainActivity extends AppCompatActivity
                 if (location != null) {
                     latBuf.add((float) location.getLatitude());
                     lonBuf.add((float) location.getLongitude());
-                    eleBuf.add((float) location.getAltitude());
+                    altBuf.add((float) location.getAltitude());
                 }
             }
 
@@ -199,6 +204,9 @@ public class MainActivity extends AppCompatActivity
         if (fusedLocationClient == null) {
             fusedLocationClient = LocationServices.getFusedLocationProviderClient(this);
         }
+        if (locationManager == null) {
+            locationManager = (LocationManager) getSystemService(LOCATION_SERVICE);
+        }
     }
 
     @SuppressLint("MissingPermission")
@@ -208,7 +216,7 @@ public class MainActivity extends AppCompatActivity
 //                            clipDurationSecs, linAccelCount, linAccelStart));
         Log.i(TAG, String.format("copy buffer %d s. gravity.size=%d, geomagnetic.size=%d, linAccel.size=%d, gyro.size=%d.",
                 clipDurationSecs, gravityX.size(), geomagneticX.size(), linAccelX.size(), gyroX.size()));
-        int sampleCount = clipDurationSecs * targetSamplingRate;
+        final int sampleCount = clipDurationSecs * targetSamplingRate;
 
         final float[] gravityXClip = SignalUtils.upsample(Floats.toArray(gravityX), sampleCount);
         gravityX.clear();
@@ -235,22 +243,10 @@ public class MainActivity extends AppCompatActivity
         final float[] gyroZClip = SignalUtils.upsample(Floats.toArray(gyroZ), sampleCount);
         gyroZ.clear();
 
-        final int locationSampleCount = clipDurationSecs * locationSamplingRate;
-        final float[] latBufArr = Floats.toArray(latBuf);
-        Log.i(TAG, String.format("latBuf.size=%d latBuf=%s", latBufArr.length, Floats.join(" ", latBufArr)));
-        final float[] latClip = SignalUtils.upsample(latBufArr, locationSampleCount);
-        latBuf.clear();
-        final float[] lonClip = SignalUtils.upsample(Floats.toArray(lonBuf), locationSampleCount);
-        lonBuf.clear();
-        final float[] altitudeClip = SignalUtils.upsample(Floats.toArray(eleBuf), locationSampleCount);
-        eleBuf.clear();
-
         Log.i(TAG, String.format("gravityXClip=%s", Floats.join(" ", gravityXClip)));
         Log.i(TAG, String.format("geomagneticXClip=%s", Floats.join(" ", geomagneticXClip)));
         Log.i(TAG, String.format("linAccelXClip=%s", Floats.join(" ", linAccelXClip)));
         Log.i(TAG, String.format("gyroXClip=%s", Floats.join(" ", gyroXClip)));
-        Log.i(TAG, String.format("latClip=%s lonClip=%s eleClip-%s",
-                Floats.join(" ", latClip), Floats.join(" ", lonClip), Floats.join(" ", altitudeClip)));
 
         // rotate to ZNE
         float[] rotMat = new float[16];
@@ -261,21 +257,24 @@ public class MainActivity extends AppCompatActivity
         final float[] gyroWorldZ = new float[sampleCount];
         final float[] gyroWorldN = new float[sampleCount];
         final float[] gyroWorldE = new float[sampleCount];
-        for (int i = 0; i < sampleCount; i++) {
+        final SimpleMatrix[] incMatrices = new SimpleMatrix[sampleCount];
+        final SimpleMatrix[] rotMatrices = new SimpleMatrix[sampleCount];
+        for (int sampleIdx = 0; sampleIdx < sampleCount; sampleIdx++) {
             SensorManager.getRotationMatrix(rotMat, incMat,
-                    new float[]{gravityXClip[i], gravityYClip[i], gravityZClip[i]},
-                    new float[]{geomagneticXClip[i], geomagneticYClip[i], geomagneticZClip[i]});
-            final SimpleMatrix rotMatrix = new SimpleMatrix(4, 4, true, rotMat);
-            final SimpleMatrix linAccelRot = rotMatrix.mult(new SimpleMatrix(4, 1, true,
-                    new float[]{linAccelXClip[i], linAccelYClip[i], linAccelZClip[i], 1}));
-            linAccelWorldE[i] = (float) linAccelRot.get(0);
-            linAccelWorldN[i] = (float) linAccelRot.get(1);
-            linAccelWorldZ[i] = (float) linAccelRot.get(2);
-            final SimpleMatrix gyroRot = rotMatrix.mult(new SimpleMatrix(4, 1, true,
-                    new float[]{gyroXClip[i], gyroYClip[i], gyroZClip[i], 1}));
-            gyroWorldE[i] = (float) gyroRot.get(0);
-            gyroWorldN[i] = (float) gyroRot.get(1);
-            gyroWorldZ[i] = (float) gyroRot.get(2);
+                    new float[]{gravityXClip[sampleIdx], gravityYClip[sampleIdx], gravityZClip[sampleIdx]},
+                    new float[]{geomagneticXClip[sampleIdx], geomagneticYClip[sampleIdx], geomagneticZClip[sampleIdx]});
+            incMatrices[sampleIdx] = new SimpleMatrix(4, 4, true, incMat);
+            rotMatrices[sampleIdx] = new SimpleMatrix(4, 4, true, rotMat);
+            final SimpleMatrix linAccelRot = rotMatrices[sampleIdx].mult(new SimpleMatrix(4, 1, true,
+                    new float[]{linAccelXClip[sampleIdx], linAccelYClip[sampleIdx], linAccelZClip[sampleIdx], 1}));
+            linAccelWorldE[sampleIdx] = (float) linAccelRot.get(0);
+            linAccelWorldN[sampleIdx] = (float) linAccelRot.get(1);
+            linAccelWorldZ[sampleIdx] = (float) linAccelRot.get(2);
+            final SimpleMatrix gyroRot = rotMatrices[sampleIdx].mult(new SimpleMatrix(4, 1, true,
+                    new float[]{gyroXClip[sampleIdx], gyroYClip[sampleIdx], gyroZClip[sampleIdx], 1}));
+            gyroWorldE[sampleIdx] = (float) gyroRot.get(0);
+            gyroWorldN[sampleIdx] = (float) gyroRot.get(1);
+            gyroWorldZ[sampleIdx] = (float) gyroRot.get(2);
         }
         Log.i(TAG, String.format("linAccelWorldZ=%s", Floats.join(" ", linAccelWorldZ)));
         Log.i(TAG, String.format("linAccelWorldN=%s", Floats.join(" ", linAccelWorldN)));
@@ -289,6 +288,24 @@ public class MainActivity extends AppCompatActivity
                     throw new RuntimeException("FusedLocationProviderClient lastLocation is null");
                 }
 
+                final int locationSampleCount = clipDurationSecs * locationSamplingRate;
+                if (latBuf.isEmpty()) {
+                    // we don't get any location updates yet, so get it from lastLocation instead
+                    latBuf.add((float) location.getLatitude());
+                    lonBuf.add((float) location.getLongitude());
+                    altBuf.add((float) location.getAltitude());
+                }
+                final float[] latBufArr = Floats.toArray(latBuf);
+                Log.i(TAG, String.format("latBuf.size=%d latBuf=%s", latBufArr.length, Floats.join(" ", latBufArr)));
+                final float[] latClip = SignalUtils.upsample(latBufArr, locationSampleCount);
+                latBuf.clear();
+                final float[] lonClip = SignalUtils.upsample(Floats.toArray(lonBuf), locationSampleCount);
+                lonBuf.clear();
+                final float[] altitudeClip = SignalUtils.upsample(Floats.toArray(altBuf), locationSampleCount);
+                altBuf.clear();
+                Log.i(TAG, String.format("latClip=%s lonClip=%s eleClip-%s",
+                        Floats.join(" ", latClip), Floats.join(" ", lonClip), Floats.join(" ", altitudeClip)));
+
                 final SignalDoc doc = new SignalDoc();
                 doc.source = "Motion Recorder";
                 final SignalNetwork network = new SignalNetwork();
@@ -298,6 +315,15 @@ public class MainActivity extends AppCompatActivity
                 station.latitude = (float) location.getLatitude();
                 station.longitude = (float) location.getLongitude();
                 station.elevation = (float) location.getAltitude();
+                // Device: brand/model/deviceCountry, System: systemName/systemVersion
+                final SignalEquipment equipment = new SignalEquipment();
+                equipment.type = Build.HARDWARE;
+                equipment.manufacturer = Build.MANUFACTURER;
+                equipment.vendor = Build.BRAND;
+                equipment.model = Build.MODEL;
+                equipment.serialNumber = Build.FINGERPRINT;
+                equipment.description = Build.VERSION.CODENAME + "/" + Build.VERSION.RELEASE;
+                station.equipment = equipment;
                 final SignalOperator operator = new SignalOperator();
                 final SignalContact contact = new SignalContact();
                 contact.name = "TODO";
@@ -305,12 +331,13 @@ public class MainActivity extends AppCompatActivity
                 station.operator = operator;
 
                 // Gravity
-                final SignalSensor sensorSG = new SignalSensor();
+                final SignalEquipment sensorSG = new SignalEquipment();
                 sensorSG.type = gravitySensor.getStringType();
                 sensorSG.vendor = gravitySensor.getVendor();
                 sensorSG.model = gravitySensor.getName();
                 final SignalChannel channelSGA = new SignalChannel();
                 channelSGA.code = "SGA";
+                channelSGA.description = "Gravity (X)";
                 channelSGA.locationCode = "00";
                 channelSGA.types.add(ChannelType.GEOPHYSICAL);
                 channelSGA.types.add(ChannelType.TRIGGERED);
@@ -324,6 +351,7 @@ public class MainActivity extends AppCompatActivity
                 station.channels.add(channelSGA);
                 final SignalChannel channelSGB = new SignalChannel();
                 channelSGB.code = "SGB";
+                channelSGB.description = "Gravity (Y)";
                 channelSGB.locationCode = "00";
                 channelSGB.types.add(ChannelType.GEOPHYSICAL);
                 channelSGB.types.add(ChannelType.TRIGGERED);
@@ -337,6 +365,7 @@ public class MainActivity extends AppCompatActivity
                 station.channels.add(channelSGB);
                 final SignalChannel channelSGC = new SignalChannel();
                 channelSGC.code = "SGC";
+                channelSGC.description = "Gravity (Z)";
                 channelSGC.locationCode = "00";
                 channelSGC.types.add(ChannelType.GEOPHYSICAL);
                 channelSGC.types.add(ChannelType.TRIGGERED);
@@ -348,278 +377,6 @@ public class MainActivity extends AppCompatActivity
                 channelSGC.endDate = endTime.toString();
                 channelSGA.sensor = sensorSG;
                 station.channels.add(channelSGC);
-
-                // Geomagnetic
-                final SignalSensor sensorSF = new SignalSensor();
-                sensorSF.type = geomagneticSensor.getStringType();
-                sensorSF.vendor = geomagneticSensor.getVendor();
-                sensorSF.model = geomagneticSensor.getName();
-                final SignalChannel channelSFA = new SignalChannel();
-                channelSFA.code = "SFA";
-                channelSFA.locationCode = "00";
-                channelSFA.types.add(ChannelType.GEOPHYSICAL);
-                channelSFA.types.add(ChannelType.TRIGGERED);
-                channelSFA.latitude = station.latitude;
-                channelSFA.longitude = station.longitude;
-                channelSFA.elevation = station.elevation;
-                channelSFA.sampleRate = targetSamplingRate;
-                channelSFA.startDate = startTime.toString();
-                channelSFA.endDate = endTime.toString();
-                channelSFA.sensor = sensorSF;
-                station.channels.add(channelSFA);
-                final SignalChannel channelSFB = new SignalChannel();
-                channelSFB.code = "SFB";
-                channelSFB.locationCode = "00";
-                channelSFB.types.add(ChannelType.GEOPHYSICAL);
-                channelSFB.types.add(ChannelType.TRIGGERED);
-                channelSFB.latitude = station.latitude;
-                channelSFB.longitude = station.longitude;
-                channelSFB.elevation = station.elevation;
-                channelSFB.sampleRate = targetSamplingRate;
-                channelSFB.startDate = startTime.toString();
-                channelSFB.endDate = endTime.toString();
-                channelSFB.sensor = sensorSF;
-                station.channels.add(channelSFB);
-                final SignalChannel channelSFC = new SignalChannel();
-                channelSFC.code = "SFC";
-                channelSFC.locationCode = "00";
-                channelSFC.types.add(ChannelType.GEOPHYSICAL);
-                channelSFC.types.add(ChannelType.TRIGGERED);
-                channelSFC.latitude = station.latitude;
-                channelSFC.longitude = station.longitude;
-                channelSFC.elevation = station.elevation;
-                channelSFC.sampleRate = targetSamplingRate;
-                channelSFC.startDate = startTime.toString();
-                channelSFC.endDate = endTime.toString();
-                channelSFC.sensor = sensorSF;
-                station.channels.add(channelSFC);
-
-                // Linear acceleration: SNA, SNB, SNC, SNZ, SNN, SNE
-                final SignalSensor sensorSNLinear = new SignalSensor();
-                sensorSNLinear.type = linAccelSensor.getStringType();
-                sensorSNLinear.vendor = linAccelSensor.getVendor();
-                sensorSNLinear.model = linAccelSensor.getName();
-                final SignalChannel channelSNA = new SignalChannel();
-                channelSNA.code = "SNA";
-                channelSNA.locationCode = "00";
-                channelSNA.types.add(ChannelType.GEOPHYSICAL);
-                channelSNA.types.add(ChannelType.TRIGGERED);
-                channelSNA.latitude = station.latitude;
-                channelSNA.longitude = station.longitude;
-                channelSNA.elevation = station.elevation;
-                channelSNA.sampleRate = targetSamplingRate;
-                channelSNA.startDate = startTime.toString();
-                channelSNA.endDate = endTime.toString();
-                channelSNA.sensor = sensorSNLinear;
-                station.channels.add(channelSNA);
-                final SignalChannel channelSNB = new SignalChannel();
-                channelSNB.code = "SNB";
-                channelSNB.locationCode = "00";
-                channelSNB.types.add(ChannelType.GEOPHYSICAL);
-                channelSNB.types.add(ChannelType.TRIGGERED);
-                channelSNB.latitude = station.latitude;
-                channelSNB.longitude = station.longitude;
-                channelSNB.elevation = station.elevation;
-                channelSNB.sampleRate = targetSamplingRate;
-                channelSNB.startDate = startTime.toString();
-                channelSNB.endDate = endTime.toString();
-                channelSNB.sensor = sensorSNLinear;
-                station.channels.add(channelSNB);
-                final SignalChannel channelSNC = new SignalChannel();
-                channelSNC.code = "SNC";
-                channelSNC.locationCode = "00";
-                channelSNC.types.add(ChannelType.GEOPHYSICAL);
-                channelSNC.types.add(ChannelType.TRIGGERED);
-                channelSNC.latitude = station.latitude;
-                channelSNC.longitude = station.longitude;
-                channelSNC.elevation = station.elevation;
-                channelSNC.sampleRate = targetSamplingRate;
-                channelSNC.startDate = startTime.toString();
-                channelSNC.endDate = endTime.toString();
-                channelSNC.sensor = sensorSNLinear;
-                station.channels.add(channelSNC);
-                final SignalChannel channelSNZ = new SignalChannel();
-                channelSNZ.code = "SNZ";
-                channelSNZ.locationCode = "00";
-                channelSNZ.types.add(ChannelType.GEOPHYSICAL);
-                channelSNZ.types.add(ChannelType.TRIGGERED);
-                channelSNZ.types.add(ChannelType.SYNTHESIZED);
-                channelSNZ.latitude = station.latitude;
-                channelSNZ.longitude = station.longitude;
-                channelSNZ.elevation = station.elevation;
-                channelSNZ.sampleRate = targetSamplingRate;
-                channelSNZ.startDate = startTime.toString();
-                channelSNZ.endDate = endTime.toString();
-                channelSNZ.sensor = sensorSNLinear;
-                station.channels.add(channelSNZ);
-                final SignalChannel channelSNN = new SignalChannel();
-                channelSNN.code = "SNN";
-                channelSNN.locationCode = "00";
-                channelSNN.types.add(ChannelType.GEOPHYSICAL);
-                channelSNN.types.add(ChannelType.TRIGGERED);
-                channelSNN.types.add(ChannelType.SYNTHESIZED);
-                channelSNN.latitude = station.latitude;
-                channelSNN.longitude = station.longitude;
-                channelSNN.elevation = station.elevation;
-                channelSNN.sampleRate = targetSamplingRate;
-                channelSNN.startDate = startTime.toString();
-                channelSNN.endDate = endTime.toString();
-                channelSNN.sensor = sensorSNLinear;
-                station.channels.add(channelSNN);
-                final SignalChannel channelSNE = new SignalChannel();
-                channelSNE.code = "SNE";
-                channelSNE.locationCode = "00";
-                channelSNE.types.add(ChannelType.GEOPHYSICAL);
-                channelSNE.types.add(ChannelType.TRIGGERED);
-                channelSNE.types.add(ChannelType.SYNTHESIZED);
-                channelSNE.latitude = station.latitude;
-                channelSNE.longitude = station.longitude;
-                channelSNE.elevation = station.elevation;
-                channelSNE.sampleRate = targetSamplingRate;
-                channelSNE.startDate = startTime.toString();
-                channelSNE.endDate = endTime.toString();
-                channelSNE.sensor = sensorSNLinear;
-                station.channels.add(channelSNE);
-
-                // Gyroscope
-                final SignalSensor sensorSJ = new SignalSensor();
-                sensorSJ.type = gyroscopeSensor.getStringType();
-                sensorSJ.vendor = gyroscopeSensor.getVendor();
-                sensorSJ.model = gyroscopeSensor.getName();
-                final SignalChannel channelSJA = new SignalChannel();
-                channelSJA.code = "SJA";
-                channelSJA.description = "Rotation rate (X)";
-                channelSJA.locationCode = "00";
-                channelSJA.types.add(ChannelType.GEOPHYSICAL);
-                channelSJA.types.add(ChannelType.TRIGGERED);
-                channelSJA.latitude = station.latitude;
-                channelSJA.longitude = station.longitude;
-                channelSJA.elevation = station.elevation;
-                channelSJA.sampleRate = targetSamplingRate;
-                channelSJA.startDate = startTime.toString();
-                channelSJA.endDate = endTime.toString();
-                channelSJA.sensor = sensorSJ;
-                station.channels.add(channelSJA);
-                final SignalChannel channelSJB = new SignalChannel();
-                channelSJB.code = "SJB";
-                channelSJB.description = "Rotation rate (Y)";
-                channelSJB.locationCode = "00";
-                channelSJB.types.add(ChannelType.GEOPHYSICAL);
-                channelSJB.types.add(ChannelType.TRIGGERED);
-                channelSJB.latitude = station.latitude;
-                channelSJB.longitude = station.longitude;
-                channelSJB.elevation = station.elevation;
-                channelSJB.sampleRate = targetSamplingRate;
-                channelSJB.startDate = startTime.toString();
-                channelSJB.endDate = endTime.toString();
-                channelSJB.sensor = sensorSJ;
-                station.channels.add(channelSJB);
-                final SignalChannel channelSJC = new SignalChannel();
-                channelSJC.code = "SJC";
-                channelSJC.description = "Rotation rate (Z)";
-                channelSJC.locationCode = "00";
-                channelSJC.types.add(ChannelType.GEOPHYSICAL);
-                channelSJC.types.add(ChannelType.TRIGGERED);
-                channelSJC.latitude = station.latitude;
-                channelSJC.longitude = station.longitude;
-                channelSJC.elevation = station.elevation;
-                channelSJC.sampleRate = targetSamplingRate;
-                channelSJC.startDate = startTime.toString();
-                channelSJC.endDate = endTime.toString();
-                channelSJC.sensor = sensorSJ;
-                station.channels.add(channelSJC);
-                final SignalChannel channelSJZ = new SignalChannel();
-                channelSJZ.code = "SJZ";
-                channelSJZ.locationCode = "00";
-                channelSJZ.types.add(ChannelType.GEOPHYSICAL);
-                channelSJZ.types.add(ChannelType.TRIGGERED);
-                channelSJZ.types.add(ChannelType.SYNTHESIZED);
-                channelSJZ.latitude = station.latitude;
-                channelSJZ.longitude = station.longitude;
-                channelSJZ.elevation = station.elevation;
-                channelSJZ.sampleRate = targetSamplingRate;
-                channelSJZ.startDate = startTime.toString();
-                channelSJZ.endDate = endTime.toString();
-                channelSJZ.sensor = sensorSJ;
-                station.channels.add(channelSJZ);
-                final SignalChannel channelSJN = new SignalChannel();
-                channelSJN.code = "SJN";
-                channelSJN.locationCode = "00";
-                channelSJN.types.add(ChannelType.GEOPHYSICAL);
-                channelSJN.types.add(ChannelType.TRIGGERED);
-                channelSJN.types.add(ChannelType.SYNTHESIZED);
-                channelSJN.latitude = station.latitude;
-                channelSJN.longitude = station.longitude;
-                channelSJN.elevation = station.elevation;
-                channelSJN.sampleRate = targetSamplingRate;
-                channelSJN.startDate = startTime.toString();
-                channelSJN.endDate = endTime.toString();
-                channelSJN.sensor = sensorSJ;
-                station.channels.add(channelSJN);
-                final SignalChannel channelSJE = new SignalChannel();
-                channelSJE.code = "SJE";
-                channelSJE.locationCode = "00";
-                channelSJE.types.add(ChannelType.GEOPHYSICAL);
-                channelSJE.types.add(ChannelType.TRIGGERED);
-                channelSJE.types.add(ChannelType.SYNTHESIZED);
-                channelSJE.latitude = station.latitude;
-                channelSJE.longitude = station.longitude;
-                channelSJE.elevation = station.elevation;
-                channelSJE.sampleRate = targetSamplingRate;
-                channelSJE.startDate = startTime.toString();
-                channelSJE.endDate = endTime.toString();
-                channelSJE.sensor = sensorSJ;
-                station.channels.add(channelSJE);
-
-                // TODO: Inclination matrix, Rotation matrix
-
-                // Latitude, longitude, altitude
-                final SignalChannel channelMYZ = new SignalChannel();
-                channelMYZ.code = "MYZ";
-                channelMYZ.description = "Altitude";
-                channelMYZ.locationCode = "00";
-                channelMYZ.types.add(ChannelType.WEATHER);
-                channelMYZ.types.add(ChannelType.TRIGGERED);
-                channelMYZ.latitude = station.latitude;
-                channelMYZ.longitude = station.longitude;
-                channelMYZ.elevation = station.elevation;
-                channelMYZ.sampleRate = locationSamplingRate;
-                channelMYZ.startDate = startTime.toString();
-                channelMYZ.endDate = endTime.toString();
-                station.channels.add(channelMYZ);
-                final SignalChannel channelMYN = new SignalChannel();
-                channelMYN.code = "MYN";
-                channelMYN.description = "Latitude";
-                channelMYN.locationCode = "00";
-                channelMYZ.types.add(ChannelType.WEATHER);
-                channelMYN.types.add(ChannelType.TRIGGERED);
-                channelMYN.latitude = station.latitude;
-                channelMYN.longitude = station.longitude;
-                channelMYN.elevation = station.elevation;
-                channelMYN.sampleRate = locationSamplingRate;
-                channelMYN.startDate = startTime.toString();
-                channelMYN.endDate = endTime.toString();
-                station.channels.add(channelMYN);
-                final SignalChannel channelMYE = new SignalChannel();
-                channelMYE.code = "MYE";
-                channelMYE.description = "Longitude";
-                channelMYE.locationCode = "00";
-                channelMYZ.types.add(ChannelType.WEATHER);
-                channelMYE.types.add(ChannelType.TRIGGERED);
-                channelMYE.latitude = station.latitude;
-                channelMYE.longitude = station.longitude;
-                channelMYE.elevation = station.elevation;
-                channelMYE.sampleRate = locationSamplingRate;
-                channelMYE.startDate = startTime.toString();
-                channelMYE.endDate = endTime.toString();
-                station.channels.add(channelMYE);
-
-                // Device: brand/model/deviceCountry, System: systemName/systemVersion
-
-
-                network.stations.add(station);
-                doc.networks.add(network);
-
                 // Traces - gravity
                 final SignalTrace traceSGA = new SignalTrace();
                 traceSGA.network = network.code;
@@ -660,6 +417,54 @@ public class MainActivity extends AppCompatActivity
                 traceSGC.calib = 1f;
                 traceSGC.npts = traceSGC.values.length;
                 doc.traces.add(traceSGC);
+
+                // Geomagnetic
+                final SignalEquipment sensorSF = new SignalEquipment();
+                sensorSF.type = geomagneticSensor.getStringType();
+                sensorSF.vendor = geomagneticSensor.getVendor();
+                sensorSF.model = geomagneticSensor.getName();
+                final SignalChannel channelSFA = new SignalChannel();
+                channelSFA.code = "SFA";
+                channelSFA.description = "Geomagnetic field (X)";
+                channelSFA.locationCode = "00";
+                channelSFA.types.add(ChannelType.GEOPHYSICAL);
+                channelSFA.types.add(ChannelType.TRIGGERED);
+                channelSFA.latitude = station.latitude;
+                channelSFA.longitude = station.longitude;
+                channelSFA.elevation = station.elevation;
+                channelSFA.sampleRate = targetSamplingRate;
+                channelSFA.startDate = startTime.toString();
+                channelSFA.endDate = endTime.toString();
+                channelSFA.sensor = sensorSF;
+                station.channels.add(channelSFA);
+                final SignalChannel channelSFB = new SignalChannel();
+                channelSFB.code = "SFB";
+                channelSFB.description = "Geomagnetic field (Y)";
+                channelSFB.locationCode = "00";
+                channelSFB.types.add(ChannelType.GEOPHYSICAL);
+                channelSFB.types.add(ChannelType.TRIGGERED);
+                channelSFB.latitude = station.latitude;
+                channelSFB.longitude = station.longitude;
+                channelSFB.elevation = station.elevation;
+                channelSFB.sampleRate = targetSamplingRate;
+                channelSFB.startDate = startTime.toString();
+                channelSFB.endDate = endTime.toString();
+                channelSFB.sensor = sensorSF;
+                station.channels.add(channelSFB);
+                final SignalChannel channelSFC = new SignalChannel();
+                channelSFC.code = "SFC";
+                channelSFC.description = "Geomagnetic field (Z)";
+                channelSFC.locationCode = "00";
+                channelSFC.types.add(ChannelType.GEOPHYSICAL);
+                channelSFC.types.add(ChannelType.TRIGGERED);
+                channelSFC.latitude = station.latitude;
+                channelSFC.longitude = station.longitude;
+                channelSFC.elevation = station.elevation;
+                channelSFC.sampleRate = targetSamplingRate;
+                channelSFC.startDate = startTime.toString();
+                channelSFC.endDate = endTime.toString();
+                channelSFC.sensor = sensorSF;
+                station.channels.add(channelSFC);
                 // Traces - geomagnetic
                 final SignalTrace traceSFA = new SignalTrace();
                 traceSFA.network = network.code;
@@ -700,6 +505,99 @@ public class MainActivity extends AppCompatActivity
                 traceSFC.calib = 1f;
                 traceSFC.npts = traceSFC.values.length;
                 doc.traces.add(traceSFC);
+
+                // Linear acceleration: SNA, SNB, SNC, SNZ, SNN, SNE
+                final SignalEquipment sensorSNLinear = new SignalEquipment();
+                sensorSNLinear.type = linAccelSensor.getStringType();
+                sensorSNLinear.vendor = linAccelSensor.getVendor();
+                sensorSNLinear.model = linAccelSensor.getName();
+                final SignalChannel channelSNA = new SignalChannel();
+                channelSNA.code = "SNA";
+                channelSNA.description = "Linear acceleration (X)";
+                channelSNA.locationCode = "00";
+                channelSNA.types.add(ChannelType.GEOPHYSICAL);
+                channelSNA.types.add(ChannelType.TRIGGERED);
+                channelSNA.latitude = station.latitude;
+                channelSNA.longitude = station.longitude;
+                channelSNA.elevation = station.elevation;
+                channelSNA.sampleRate = targetSamplingRate;
+                channelSNA.startDate = startTime.toString();
+                channelSNA.endDate = endTime.toString();
+                channelSNA.sensor = sensorSNLinear;
+                station.channels.add(channelSNA);
+                final SignalChannel channelSNB = new SignalChannel();
+                channelSNB.code = "SNB";
+                channelSNB.description = "Linear acceleration (Y)";
+                channelSNB.locationCode = "00";
+                channelSNB.types.add(ChannelType.GEOPHYSICAL);
+                channelSNB.types.add(ChannelType.TRIGGERED);
+                channelSNB.latitude = station.latitude;
+                channelSNB.longitude = station.longitude;
+                channelSNB.elevation = station.elevation;
+                channelSNB.sampleRate = targetSamplingRate;
+                channelSNB.startDate = startTime.toString();
+                channelSNB.endDate = endTime.toString();
+                channelSNB.sensor = sensorSNLinear;
+                station.channels.add(channelSNB);
+                final SignalChannel channelSNC = new SignalChannel();
+                channelSNC.code = "SNC";
+                channelSNC.description = "Linear acceleration (Z)";
+                channelSNC.locationCode = "00";
+                channelSNC.types.add(ChannelType.GEOPHYSICAL);
+                channelSNC.types.add(ChannelType.TRIGGERED);
+                channelSNC.latitude = station.latitude;
+                channelSNC.longitude = station.longitude;
+                channelSNC.elevation = station.elevation;
+                channelSNC.sampleRate = targetSamplingRate;
+                channelSNC.startDate = startTime.toString();
+                channelSNC.endDate = endTime.toString();
+                channelSNC.sensor = sensorSNLinear;
+                station.channels.add(channelSNC);
+                final SignalChannel channelSNZ = new SignalChannel();
+                channelSNZ.code = "SNZ";
+                channelSNZ.description = "Linear acceleration (Vertical)";
+                channelSNZ.locationCode = "00";
+                channelSNZ.types.add(ChannelType.GEOPHYSICAL);
+                channelSNZ.types.add(ChannelType.TRIGGERED);
+                channelSNZ.types.add(ChannelType.SYNTHESIZED);
+                channelSNZ.latitude = station.latitude;
+                channelSNZ.longitude = station.longitude;
+                channelSNZ.elevation = station.elevation;
+                channelSNZ.sampleRate = targetSamplingRate;
+                channelSNZ.startDate = startTime.toString();
+                channelSNZ.endDate = endTime.toString();
+                channelSNZ.sensor = sensorSNLinear;
+                station.channels.add(channelSNZ);
+                final SignalChannel channelSNN = new SignalChannel();
+                channelSNN.code = "SNN";
+                channelSNN.description = "Linear acceleration (North-South)";
+                channelSNN.locationCode = "00";
+                channelSNN.types.add(ChannelType.GEOPHYSICAL);
+                channelSNN.types.add(ChannelType.TRIGGERED);
+                channelSNN.types.add(ChannelType.SYNTHESIZED);
+                channelSNN.latitude = station.latitude;
+                channelSNN.longitude = station.longitude;
+                channelSNN.elevation = station.elevation;
+                channelSNN.sampleRate = targetSamplingRate;
+                channelSNN.startDate = startTime.toString();
+                channelSNN.endDate = endTime.toString();
+                channelSNN.sensor = sensorSNLinear;
+                station.channels.add(channelSNN);
+                final SignalChannel channelSNE = new SignalChannel();
+                channelSNE.code = "SNE";
+                channelSNE.description = "Linear acceleration (East-West)";
+                channelSNE.locationCode = "00";
+                channelSNE.types.add(ChannelType.GEOPHYSICAL);
+                channelSNE.types.add(ChannelType.TRIGGERED);
+                channelSNE.types.add(ChannelType.SYNTHESIZED);
+                channelSNE.latitude = station.latitude;
+                channelSNE.longitude = station.longitude;
+                channelSNE.elevation = station.elevation;
+                channelSNE.sampleRate = targetSamplingRate;
+                channelSNE.startDate = startTime.toString();
+                channelSNE.endDate = endTime.toString();
+                channelSNE.sensor = sensorSNLinear;
+                station.channels.add(channelSNE);
                 // Traces - linear acceleration
                 final SignalTrace traceSNA = new SignalTrace();
                 traceSNA.network = network.code;
@@ -779,6 +677,99 @@ public class MainActivity extends AppCompatActivity
                 traceSNE.calib = 1f;
                 traceSNE.npts = traceSNE.values.length;
                 doc.traces.add(traceSNE);
+
+                // Gyroscope
+                final SignalEquipment sensorSJ = new SignalEquipment();
+                sensorSJ.type = gyroscopeSensor.getStringType();
+                sensorSJ.vendor = gyroscopeSensor.getVendor();
+                sensorSJ.model = gyroscopeSensor.getName();
+                final SignalChannel channelSJA = new SignalChannel();
+                channelSJA.code = "SJA";
+                channelSJA.description = "Rotation rate (X)";
+                channelSJA.locationCode = "00";
+                channelSJA.types.add(ChannelType.GEOPHYSICAL);
+                channelSJA.types.add(ChannelType.TRIGGERED);
+                channelSJA.latitude = station.latitude;
+                channelSJA.longitude = station.longitude;
+                channelSJA.elevation = station.elevation;
+                channelSJA.sampleRate = targetSamplingRate;
+                channelSJA.startDate = startTime.toString();
+                channelSJA.endDate = endTime.toString();
+                channelSJA.sensor = sensorSJ;
+                station.channels.add(channelSJA);
+                final SignalChannel channelSJB = new SignalChannel();
+                channelSJB.code = "SJB";
+                channelSJB.description = "Rotation rate (Y)";
+                channelSJB.locationCode = "00";
+                channelSJB.types.add(ChannelType.GEOPHYSICAL);
+                channelSJB.types.add(ChannelType.TRIGGERED);
+                channelSJB.latitude = station.latitude;
+                channelSJB.longitude = station.longitude;
+                channelSJB.elevation = station.elevation;
+                channelSJB.sampleRate = targetSamplingRate;
+                channelSJB.startDate = startTime.toString();
+                channelSJB.endDate = endTime.toString();
+                channelSJB.sensor = sensorSJ;
+                station.channels.add(channelSJB);
+                final SignalChannel channelSJC = new SignalChannel();
+                channelSJC.code = "SJC";
+                channelSJC.description = "Rotation rate (Z)";
+                channelSJC.locationCode = "00";
+                channelSJC.types.add(ChannelType.GEOPHYSICAL);
+                channelSJC.types.add(ChannelType.TRIGGERED);
+                channelSJC.latitude = station.latitude;
+                channelSJC.longitude = station.longitude;
+                channelSJC.elevation = station.elevation;
+                channelSJC.sampleRate = targetSamplingRate;
+                channelSJC.startDate = startTime.toString();
+                channelSJC.endDate = endTime.toString();
+                channelSJC.sensor = sensorSJ;
+                station.channels.add(channelSJC);
+                final SignalChannel channelSJZ = new SignalChannel();
+                channelSJZ.code = "SJZ";
+                channelSJZ.description = "Rotation rate (Vertical)";
+                channelSJZ.locationCode = "00";
+                channelSJZ.types.add(ChannelType.GEOPHYSICAL);
+                channelSJZ.types.add(ChannelType.TRIGGERED);
+                channelSJZ.types.add(ChannelType.SYNTHESIZED);
+                channelSJZ.latitude = station.latitude;
+                channelSJZ.longitude = station.longitude;
+                channelSJZ.elevation = station.elevation;
+                channelSJZ.sampleRate = targetSamplingRate;
+                channelSJZ.startDate = startTime.toString();
+                channelSJZ.endDate = endTime.toString();
+                channelSJZ.sensor = sensorSJ;
+                station.channels.add(channelSJZ);
+                final SignalChannel channelSJN = new SignalChannel();
+                channelSJN.code = "SJN";
+                channelSJN.description = "Rotation rate (North-South)";
+                channelSJN.locationCode = "00";
+                channelSJN.types.add(ChannelType.GEOPHYSICAL);
+                channelSJN.types.add(ChannelType.TRIGGERED);
+                channelSJN.types.add(ChannelType.SYNTHESIZED);
+                channelSJN.latitude = station.latitude;
+                channelSJN.longitude = station.longitude;
+                channelSJN.elevation = station.elevation;
+                channelSJN.sampleRate = targetSamplingRate;
+                channelSJN.startDate = startTime.toString();
+                channelSJN.endDate = endTime.toString();
+                channelSJN.sensor = sensorSJ;
+                station.channels.add(channelSJN);
+                final SignalChannel channelSJE = new SignalChannel();
+                channelSJE.code = "SJE";
+                channelSJE.description = "Rotation rate (East-West)";
+                channelSJE.locationCode = "00";
+                channelSJE.types.add(ChannelType.GEOPHYSICAL);
+                channelSJE.types.add(ChannelType.TRIGGERED);
+                channelSJE.types.add(ChannelType.SYNTHESIZED);
+                channelSJE.latitude = station.latitude;
+                channelSJE.longitude = station.longitude;
+                channelSJE.elevation = station.elevation;
+                channelSJE.sampleRate = targetSamplingRate;
+                channelSJE.startDate = startTime.toString();
+                channelSJE.endDate = endTime.toString();
+                channelSJE.sensor = sensorSJ;
+                station.channels.add(channelSJE);
                 // Traces - gyroscope/rotation rate
                 final SignalTrace traceSJA = new SignalTrace();
                 traceSJA.network = network.code;
@@ -858,8 +849,140 @@ public class MainActivity extends AppCompatActivity
                 traceSJE.calib = 1f;
                 traceSJE.npts = traceSJE.values.length;
                 doc.traces.add(traceSJE);
-                
+
+                // Inclination matrix, Rotation matrix
+                String[] matrixCodes = new String[] { "0", "1", "2", "4", "5", "6", "8", "9", "A" };
+                // Inclination matrix
+                for (int chanIdx = 0; chanIdx < matrixCodes.length; chanIdx++) {
+                    final SignalChannel channelIM_SX = new SignalChannel();
+                    channelIM_SX.code = "SX" + matrixCodes[chanIdx];
+                    channelIM_SX.description = "Inclination matrix";
+                    channelIM_SX.locationCode = "IM";
+                    channelIM_SX.types.add(ChannelType.WEATHER);
+                    channelIM_SX.types.add(ChannelType.TRIGGERED);
+                    channelIM_SX.types.add(ChannelType.SYNTHESIZED);
+                    channelIM_SX.latitude = station.latitude;
+                    channelIM_SX.longitude = station.longitude;
+                    channelIM_SX.elevation = station.elevation;
+                    channelIM_SX.sampleRate = targetSamplingRate;
+                    channelIM_SX.startDate = startTime.toString();
+                    channelIM_SX.endDate = endTime.toString();
+                    station.channels.add(channelIM_SX);
+                }
+                // Rotation matrix
+                for (int chanIdx = 0; chanIdx < matrixCodes.length; chanIdx++) {
+                    final SignalChannel channelRM_SX = new SignalChannel();
+                    channelRM_SX.code = "SX" + matrixCodes[chanIdx];
+                    channelRM_SX.description = "Rotation matrix";
+                    channelRM_SX.locationCode = "RM";
+                    channelRM_SX.types.add(ChannelType.WEATHER);
+                    channelRM_SX.types.add(ChannelType.TRIGGERED);
+                    channelRM_SX.types.add(ChannelType.SYNTHESIZED);
+                    channelRM_SX.latitude = station.latitude;
+                    channelRM_SX.longitude = station.longitude;
+                    channelRM_SX.elevation = station.elevation;
+                    channelRM_SX.sampleRate = targetSamplingRate;
+                    channelRM_SX.startDate = startTime.toString();
+                    channelRM_SX.endDate = endTime.toString();
+                    station.channels.add(channelRM_SX);
+                }
+                // Traces - inclination matrix
+                int[] matrixRows = new int[] { 0, 0, 0, 1, 1, 1, 2, 2, 2 };
+                int[] matrixCols = new int[] { 0, 1, 2, 0, 1, 2, 0, 1, 2 };
+                for (int chanIdx = 0; chanIdx < matrixCodes.length; chanIdx++) {
+                    final SignalTrace traceIM_SX = new SignalTrace();
+                    traceIM_SX.network = network.code;
+                    traceIM_SX.station = station.code;
+                    traceIM_SX.location = "IM";
+                    traceIM_SX.channel = "SX" + matrixCodes[chanIdx];
+                    traceIM_SX.startTime = startTime.toString();
+                    traceIM_SX.endTime = endTime.toString();
+                    traceIM_SX.samplingRate = targetSamplingRate;
+                    traceIM_SX.delta = 1f / traceIM_SX.samplingRate;
+                    traceIM_SX.values = new float[sampleCount];
+                    for (int sampleIdx = 0; sampleIdx < sampleCount; sampleIdx++) {
+                        traceIM_SX.values[sampleIdx] = (float) incMatrices[sampleIdx].get(matrixRows[chanIdx], matrixCols[chanIdx]);
+                    }
+                    traceIM_SX.calib = 1f;
+                    traceIM_SX.npts = traceIM_SX.values.length;
+                    doc.traces.add(traceIM_SX);
+                }
+                // Traces - rotation matrix
+                for (int chanIdx = 0; chanIdx < matrixCodes.length; chanIdx++) {
+                    final SignalTrace traceRM_SX = new SignalTrace();
+                    traceRM_SX.network = network.code;
+                    traceRM_SX.station = station.code;
+                    traceRM_SX.location = "RM";
+                    traceRM_SX.channel = "SX" + matrixCodes[chanIdx];
+                    traceRM_SX.startTime = startTime.toString();
+                    traceRM_SX.endTime = endTime.toString();
+                    traceRM_SX.samplingRate = targetSamplingRate;
+                    traceRM_SX.delta = 1f / traceRM_SX.samplingRate;
+                    traceRM_SX.values = new float[sampleCount];
+                    for (int sampleIdx = 0; sampleIdx < sampleCount; sampleIdx++) {
+                        traceRM_SX.values[sampleIdx] = (float) rotMatrices[sampleIdx].get(matrixRows[chanIdx], matrixCols[chanIdx]);
+                    }
+                    traceRM_SX.calib = 1f;
+                    traceRM_SX.npts = traceRM_SX.values.length;
+                    doc.traces.add(traceRM_SX);
+                }
+
                 // Latitude, longitude, altitude
+                final LocationProvider gpsProvider = locationManager.getProvider(LocationManager.GPS_PROVIDER);
+                final SignalEquipment gpsSensor = new SignalEquipment();
+                gpsSensor.type = gpsProvider.getName();
+                gpsSensor.accuracy = gpsProvider.getAccuracy();
+                gpsSensor.powerRequirement = gpsProvider.getPowerRequirement();
+                gpsSensor.hasMonetaryCost = gpsProvider.hasMonetaryCost();
+                gpsSensor.requiresCell = gpsProvider.requiresCell();
+                gpsSensor.requiresNetwork = gpsProvider.requiresNetwork();
+                gpsSensor.requiresSatellite = gpsProvider.requiresSatellite();
+                gpsSensor.supportsAltitude = gpsProvider.supportsAltitude();
+                gpsSensor.supportsBearing = gpsProvider.supportsBearing();
+                gpsSensor.supportsSpeed = gpsProvider.supportsSpeed();
+                final SignalChannel channelMYZ = new SignalChannel();
+                channelMYZ.code = "MYZ";
+                channelMYZ.description = "Altitude";
+                channelMYZ.locationCode = "00";
+                channelMYZ.types.add(ChannelType.WEATHER);
+                channelMYZ.types.add(ChannelType.TRIGGERED);
+                channelMYZ.latitude = station.latitude;
+                channelMYZ.longitude = station.longitude;
+                channelMYZ.elevation = station.elevation;
+                channelMYZ.sampleRate = locationSamplingRate;
+                channelMYZ.startDate = startTime.toString();
+                channelMYZ.endDate = endTime.toString();
+                channelMYZ.sensor = gpsSensor;
+                station.channels.add(channelMYZ);
+                final SignalChannel channelMYN = new SignalChannel();
+                channelMYN.code = "MYN";
+                channelMYN.description = "Latitude";
+                channelMYN.locationCode = "00";
+                channelMYN.types.add(ChannelType.WEATHER);
+                channelMYN.types.add(ChannelType.TRIGGERED);
+                channelMYN.latitude = station.latitude;
+                channelMYN.longitude = station.longitude;
+                channelMYN.elevation = station.elevation;
+                channelMYN.sampleRate = locationSamplingRate;
+                channelMYN.startDate = startTime.toString();
+                channelMYN.endDate = endTime.toString();
+                channelMYN.sensor = gpsSensor;
+                station.channels.add(channelMYN);
+                final SignalChannel channelMYE = new SignalChannel();
+                channelMYE.code = "MYE";
+                channelMYE.description = "Longitude";
+                channelMYE.locationCode = "00";
+                channelMYE.types.add(ChannelType.WEATHER);
+                channelMYE.types.add(ChannelType.TRIGGERED);
+                channelMYE.latitude = station.latitude;
+                channelMYE.longitude = station.longitude;
+                channelMYE.elevation = station.elevation;
+                channelMYE.sampleRate = locationSamplingRate;
+                channelMYE.startDate = startTime.toString();
+                channelMYE.endDate = endTime.toString();
+                channelMYE.sensor = gpsSensor;
+                station.channels.add(channelMYE);
+                // Traces - Latitude, longitude, altitude
                 final SignalTrace traceMYZ = new SignalTrace();
                 traceMYZ.network = network.code;
                 traceMYZ.station = station.code;
@@ -900,13 +1023,16 @@ public class MainActivity extends AppCompatActivity
                 traceMYE.npts = traceMYE.values.length;
                 doc.traces.add(traceMYE);
 
+                network.stations.add(station);
+                doc.networks.add(network);
+
                 final JsonAdapter<SignalDoc> signalDocAdapter = moshi.adapter(SignalDoc.class);
                 final String json = signalDocAdapter.indent("  ").toJson(doc);
                 LogUtils.iLong(TAG, "SignalDoc: " + json);
 
                 // Reset
                 startTime = OffsetDateTime.now();
-                pushLastLocation();
+                updateLastLocation();
             }
         });
     }
@@ -937,7 +1063,7 @@ public class MainActivity extends AppCompatActivity
         }
 
         // location
-        pushLastLocation();
+        updateLastLocation();
         final LocationRequest locationRequest = LocationRequest.create();
         locationRequest.setPriority(LocationRequest.PRIORITY_HIGH_ACCURACY);
         locationRequest.setInterval(1000 / locationSamplingRate);
@@ -946,7 +1072,7 @@ public class MainActivity extends AppCompatActivity
     }
 
     @SuppressLint("MissingPermission")
-    private void pushLastLocation() {
+    private void updateLastLocation() {
         fusedLocationClient.getLastLocation().addOnSuccessListener(new OnSuccessListener<Location>() {
             @Override
             public void onSuccess(Location location) {
@@ -954,9 +1080,7 @@ public class MainActivity extends AppCompatActivity
                     Log.e(TAG, "FusedLocationProviderClient lastLocation is null");
                     return;
                 }
-                latBuf.add((float) location.getLatitude());
-                lonBuf.add((float) location.getLongitude());
-                eleBuf.add((float) location.getAltitude());
+                lastLocation = location;
             }
         });
     }

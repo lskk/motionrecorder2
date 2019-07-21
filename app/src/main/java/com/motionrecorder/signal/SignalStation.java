@@ -10,6 +10,7 @@ public class SignalStation {
     public Float latitude;
     public Float longitude;
     public Float elevation;
+    public SignalEquipment equipment;
     public String site;
     public SignalOperator operator;
     public String creationDate;
