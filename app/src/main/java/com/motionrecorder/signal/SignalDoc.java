@@ -8,4 +8,8 @@ public class SignalDoc {
     public List<SignalNetwork> networks = new ArrayList<>();
     public List<SignalTrace> traces = new ArrayList<>();
 
+    // Annotations
+    public String motionLabel;
+    public String quakeLabel;
+    public String nonquakeLabel;
 }

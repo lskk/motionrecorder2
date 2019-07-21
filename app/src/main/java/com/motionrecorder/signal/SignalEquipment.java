@@ -21,5 +21,4 @@ public class SignalEquipment {
     public Boolean supportsAltitude;
     public Boolean supportsBearing;
     public Boolean supportsSpeed;
-
 }
